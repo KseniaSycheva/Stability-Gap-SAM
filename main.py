@@ -18,15 +18,45 @@ import matplotlib.pyplot as plt
 
 # Load custom-written code
 from src.data.manipulate import TransformedDataset
-from src.metrics import test_acc
+from src.metrics import accuracy, test_acc
 from src.models.classifier import Classifier
 from src.optimizers.utils import initialize_optimizer
 from src.utils import open_pdf, plot_lines, print_model_info
 
 
+def helper(model, optimizer, data_loader, criterion):
+    def closure():
+        x, y = next(data_loader)
+        if torch.cuda.is_available():
+            x, y = x.cuda(), y.cuda()
+
+        x, y = Variable(x), Variable(y.squeeze())
+
+        optimizer.zero_grad()
+        y_hat = model(x)
+        loss = criterion(
+            input=y_hat,
+            target=y,
+        )
+        loss.backward()
+
+        return loss.data
+
+    return closure
+
+
 # Define a function to train a model, while also evaluating its performance after each iteration
 def train_and_evaluate(
-    model: nn.Module, optimizer_name: str, trainset: torch.utils.data.Dataset, iters, lr: float, batch_size: int, testset: torch.utils.data.Dataset, test_size: int = 512, performance: list[float] = None
+    model: nn.Module,
+    optimizer_name: str,
+    train_set: torch.utils.data.Dataset,
+    iters,
+    lr: float,
+    batch_size: int,
+    test_set: torch.utils.data.Dataset,
+    test_size: int = 512,
+    performance: list[float] = None,
+    **kwargs,
 ):
     """Function to train a [model] on a given [dataset],
     while evaluating after each training iteration on [testset]."""
@@ -38,69 +68,62 @@ def train_and_evaluate(
 
     data_loader = iter(
         torch.utils.data.DataLoader(
-            trainset, batch_size=batch_size, shuffle=True, drop_last=True
+            train_set, batch_size=batch_size, shuffle=True, drop_last=True
         )
     )
     iters_left = len(data_loader) + 1
 
-    optimizer = initialize_optimizer(model, optimizer_name=optimizer_name, lr=lr)
-    if optimizer_name == "Entropy-SGD":
-        def helper():
-            def feval():
-                xx, yy = next(data_loader)
-                if torch.cuda.is_available():
-                    xx, yy = xx.cuda(), yy.cuda()
-
-                xx, yy = Variable(xx), Variable(yy.squeeze())
-
-                optimizer.zero_grad()
-                yh = model(xx)
-                f = criterion.forward(yh, yy)
-                f.backward()
-
-                prec1, = accuracy(yh.data, yy.data, topk=(1,))
-                err = 100. - prec1[0]
-                return f.data[0], err
-
-            return feval
+    optimizer = initialize_optimizer(
+        model, optimizer_name=optimizer_name, lr=lr, **kwargs
+    )
 
     model.train()
     progress_bar = tqdm.tqdm(range(1, iters + 1))
 
+    n_iter_per_step = kwargs.get("L", 0) + 1
+
     for _ in range(1, iters + 1):
-        optimizer.zero_grad()
+        # optimizer.zero_grad()
 
         # Collect data from training set and compute the loss
-        iters_left -= 1
-        if iters_left == 0:
-            data_loader = iter(torch.utils.data.DataLoader(trainset, batch_size=batch_size,
-                                                           shuffle=True, drop_last=True))
+        iters_left -= n_iter_per_step
+        if iters_left <= 0:
+            data_loader = iter(
+                torch.utils.data.DataLoader(
+                    train_set, batch_size=batch_size, shuffle=True, drop_last=True
+                )
+            )
             iters_left = len(data_loader)
 
-        x, y = next(data_loader)
-        if model.cuda:
-            x, y = x.cuda(), y.cuda()
-        y_hat = model(x)
-        loss = criterion(
-            input=y_hat, target=y,
-        )
+        # x, y = next(data_loader)
+        # if model.cuda:
+        #     x, y = x.cuda(), y.cuda()
+        # y_hat = model(x)
+        # loss = criterion(
+        #     input=y_hat, target=y,
+        # )
 
         # Calculate test accuracy (in %)
-        accuracy = 100 * test_acc(
-            model, testset, test_size=test_size, verbose=False, batch_size=512
+        acc = 100 * test_acc(
+            model, test_set, test_size=test_size, verbose=False, batch_size=512
         )
-        performance.append(accuracy)
+        performance.append(acc)
 
         # Take gradient step
-        loss.backward()
+        # loss.backward()
 
         if optimizer_name == "Entropy-SGD":
-            optimizer.step(helper(), model, criterion)
+            loss = optimizer.step(
+                helper(model, optimizer, data_loader, criterion), model, criterion
+            )
         else:
-            optimizer.step()
+            loss = optimizer.step(
+                closure=helper(model, optimizer, data_loader, criterion)
+            )
+        # import pdb; pdb.set_trace()
         progress_bar.set_description(
             "<CLASSIFIER> | training loss: {loss:.3} | test accuracy: {prec:.3}% |".format(
-                loss=loss.item(), prec=accuracy
+                loss=loss.item(), prec=acc
             )
         )
         progress_bar.update(1)
@@ -210,6 +233,11 @@ def main(args):
     batch_size = args.batch_size
     test_size = args.test_size
 
+    kwargs = {}
+
+    if args.optimizer == "Entropy-SGD":
+        kwargs["L"] = args.L
+
     # Define a list to keep track of the performance on task 1 after each iteration
     performance_task1 = []
 
@@ -228,13 +256,14 @@ def main(args):
         train_and_evaluate(
             model,
             optimizer_name=args.optimizer,
-            trainset=joint_dataset,
+            train_set=joint_dataset,
             iters=iters,
             lr=lr,
             batch_size=batch_size_to_use,
-            testset=test_datasets[0],
+            test_set=test_datasets[0],
             test_size=test_size,
             performance=performance_task1,
+            **kwargs,
         )
 
     ################## PLOTTING ##################
@@ -269,6 +298,8 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--num_iters", type=int, default=500)
     parser.add_argument("--test_size", type=int, default=2000)
+    # Entropy-SGD parameters
+    parser.add_argument("--L", type=int, default=5)
 
     args = parser.parse_args()
     main(args)
