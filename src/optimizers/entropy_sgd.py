@@ -14,7 +14,7 @@ class EntropySGD(Optimizer):
             nesterov=True,
             L=0,
             eps=1e-4,
-            g0=1e-2,
+            scale=1e-2,
             g1=0,
         )
         for k in defaults:
@@ -39,7 +39,7 @@ class EntropySGD(Optimizer):
         nesterov = c["nesterov"]
         L = int(c["L"])
         eps = c["eps"]
-        g0 = c["g0"]
+        scale = c["scale"]
         g1 = c["g1"]
 
         params = self.param_groups[0]["params"]
@@ -70,7 +70,7 @@ class EntropySGD(Optimizer):
 
         state["debug"] = dict(wwpd=0, df=0, dF=0, g=0, eta=0)
         llr, beta1 = lp["lr"], lp["beta1"]
-        g = g0 * (1 + g1) ** state["t"]
+        g = scale * (1 + g1) ** state["t"]
 
         for i in range(L):
             f = closure()

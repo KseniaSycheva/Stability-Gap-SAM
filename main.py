@@ -53,16 +53,16 @@ def train_and_evaluate(
     iters,
     lr: float,
     batch_size: int,
-    test_set: torch.utils.data.Dataset,
+    test_sets: [torch.utils.data.Dataset],
     test_size: int = 512,
-    performance: list[float] = None,
+    performance: dict[str, list[float]] = None,
     **kwargs,
 ):
     """Function to train a [model] on a given [dataset],
     while evaluating after each training iteration on [testset]."""
 
     if performance is None:
-        performance = []
+        performance = {f"task_{i}": [] for i in range(1, len(test_sets) + 1)}
 
     criterion = torch.nn.CrossEntropyLoss()
 
@@ -83,11 +83,9 @@ def train_and_evaluate(
     n_iter_per_step = kwargs.get("L", 0) + 1
 
     for _ in range(1, iters + 1):
-        # optimizer.zero_grad()
-
         # Collect data from training set and compute the loss
         iters_left -= n_iter_per_step
-        if iters_left <= 0:
+        if iters_left < n_iter_per_step:
             data_loader = iter(
                 torch.utils.data.DataLoader(
                     train_set, batch_size=batch_size, shuffle=True, drop_last=True
@@ -95,22 +93,12 @@ def train_and_evaluate(
             )
             iters_left = len(data_loader)
 
-        # x, y = next(data_loader)
-        # if model.cuda:
-        #     x, y = x.cuda(), y.cuda()
-        # y_hat = model(x)
-        # loss = criterion(
-        #     input=y_hat, target=y,
-        # )
-
         # Calculate test accuracy (in %)
-        acc = 100 * test_acc(
-            model, test_set, test_size=test_size, verbose=False, batch_size=512
-        )
-        performance.append(acc)
-
-        # Take gradient step
-        # loss.backward()
+        for i, test_set in enumerate(test_sets):
+            acc = 100 * test_acc(
+                model, test_set, test_size=test_size, verbose=False, batch_size=512
+            )
+            performance[f"task_{i + 1}"].append(acc)
 
         if optimizer_name == "Entropy-SGD":
             loss = optimizer.step(
@@ -120,10 +108,10 @@ def train_and_evaluate(
             loss = optimizer.step(
                 closure=helper(model, optimizer, data_loader, criterion)
             )
-        # import pdb; pdb.set_trace()
+
         progress_bar.set_description(
             "<CLASSIFIER> | training loss: {loss:.3} | test accuracy: {prec:.3}% |".format(
-                loss=loss.item(), prec=acc
+                loss=loss.item(), prec=performance[f"task_{1}"][-1]
             )
         )
         progress_bar.update(1)
@@ -144,7 +132,10 @@ def main(args):
         print("Creating directory: {}".format(d_dir))
 
     # Open pdf for plotting
-    plot_name = "stability_gap_example"
+    plot_name = f"stability_gap_example-{args.optimizer}-{args.lr}-{args.num_iters}"
+    if args.optimizer == "Entropy-SGD":
+        plot_name += f"-L{args.L}-{args.scale}"
+
     full_plot_name = "{}/{}.pdf".format(p_dir, plot_name)
     pp = open_pdf(full_plot_name)
     figure_list = []
@@ -166,7 +157,7 @@ def main(args):
     # Set for each task the amount of rotation to use
     rotations = [0, 80, 160]
 
-    # Specify for each task the transformed train- and testset
+    # Specify for each task the transformed train- and test set
     n_tasks = len(rotations)
     train_datasets = []
     test_datasets = []
@@ -237,9 +228,10 @@ def main(args):
 
     if args.optimizer == "Entropy-SGD":
         kwargs["L"] = args.L
+        kwargs["scale"] = args.scale
 
     # Define a list to keep track of the performance on task 1 after each iteration
-    performance_task1 = []
+    performance_tasks = {f"task_{i}": [] for i in range(1, len(test_datasets) + 1)}
 
     # Iterate through the contexts
     for task_id in range(n_tasks):
@@ -260,26 +252,30 @@ def main(args):
             iters=iters,
             lr=lr,
             batch_size=batch_size_to_use,
-            test_set=test_datasets[0],
+            test_sets=test_datasets[: task_id + 1],
             test_size=test_size,
-            performance=performance_task1,
+            performance=performance_tasks,
             **kwargs,
         )
+        for i in range(task_id + 1, n_tasks):
+            performance_tasks[f"task_{i + 1}"].extend(
+                [None for _ in range(args.num_iters)]
+            )
 
     ################## PLOTTING ##################
 
     ## Plot per-iteration performance curve
     figure = plot_lines(
-        [performance_task1],
+        list(performance_tasks.values()),
         x_axes=list(range(n_tasks * iters)),
-        line_names=["Incremental Joint"],
+        line_names=[f"Task {i}" for i in range(1, len(test_datasets) + 1)],
         title="Performance on Task 1 throughout 'Incremental Joint Training'",
         ylabel="Test Accuracy (%) on Task 1",
         xlabel="Total number of training iterations",
         figsize=(10, 5),
         v_line=[iters * (i + 1) for i in range(n_tasks - 1)],
         v_label="Task switch",
-        ylim=(70, 100),
+        ylim=(0, 100),
     )
     figure_list.append(figure)
 
@@ -300,6 +296,7 @@ if __name__ == "__main__":
     parser.add_argument("--test_size", type=int, default=2000)
     # Entropy-SGD parameters
     parser.add_argument("--L", type=int, default=5)
+    parser.add_argument("--scale", type=float, default=1e-2)
 
     args = parser.parse_args()
     main(args)
