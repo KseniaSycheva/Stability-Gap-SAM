@@ -1,7 +1,10 @@
 import copy
+import os
+import random
 
 import numpy as np
 import matplotlib.pyplot as plt
+import torch
 from matplotlib.backends.backend_pdf import PdfPages
 
 from torchvision import transforms
@@ -290,3 +293,15 @@ def checkattr(args, attr):
         and type(getattr(args, attr)) == bool
         and getattr(args, attr)
     )
+
+
+def set_seed(seed: int = 42):
+    """Fix all random seeds for reproducibility"""
+    random.seed(seed)  # Python random module
+    np.random.seed(seed)  # Numpy
+    torch.manual_seed(seed)  # PyTorch CPU
+    torch.cuda.manual_seed(seed)  # PyTorch GPU
+    torch.cuda.manual_seed_all(seed)  # For multi-GPU setups
+    torch.backends.cudnn.deterministic = True  # CuDNN determinism
+    torch.backends.cudnn.benchmark = False  # Disables CuDNN benchmarking
+    os.environ["PYTHONHASHSEED"] = str(seed)  # Python hash seed

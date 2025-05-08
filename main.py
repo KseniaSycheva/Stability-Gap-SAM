@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import json
 
 # Standard libraries
 import os
@@ -18,10 +19,10 @@ import matplotlib.pyplot as plt
 
 # Load custom-written code
 from src.data.manipulate import TransformedDataset
-from src.metrics import accuracy, test_acc
+from src.metrics import accuracy, compute_all_metrics
 from src.models.classifier import Classifier
 from src.optimizers.utils import initialize_optimizer
-from src.utils import open_pdf, plot_lines, print_model_info
+from src.utils import open_pdf, plot_lines, print_model_info, set_seed
 
 
 def helper(model, optimizer, data_loader, criterion):
@@ -80,7 +81,12 @@ def train_and_evaluate(
     model.train()
     progress_bar = tqdm.tqdm(range(1, iters + 1))
 
-    n_iter_per_step = kwargs.get("L", 0) + 1
+    if optimizer_name == "Entropy-SGD":
+        n_iter_per_step = kwargs.get("L", 0) + 1
+    elif optimizer_name == "C-Flat":
+        n_iter_per_step = 4
+    else:
+        n_iter_per_step = 1
 
     for _ in range(1, iters + 1):
         # Collect data from training set and compute the loss
@@ -95,7 +101,7 @@ def train_and_evaluate(
 
         # Calculate test accuracy (in %)
         for i, test_set in enumerate(test_sets):
-            acc = 100 * test_acc(
+            acc = 100 * accuracy(
                 model, test_set, test_size=test_size, verbose=False, batch_size=512
             )
             performance[f"task_{i + 1}"].append(acc)
@@ -120,6 +126,7 @@ def train_and_evaluate(
 
 def main(args):
     ################## INITIAL SET-UP ##################
+    set_seed(args.random_seed)
 
     # Specify directories, and if needed create them
     p_dir = "./store/plots"
@@ -131,16 +138,19 @@ def main(args):
         os.makedirs(d_dir)
         print("Creating directory: {}".format(d_dir))
 
+    os.makedirs("./store/metrics", exist_ok=True)
+
     # Open pdf for plotting
-    plot_name = f"stability_gap_example-{args.optimizer}-{args.lr}-{args.num_iters}"
+    plot_name = f"stability_gap_example-{args.optimizer}-{args.lr}-{args.num_iters}-{args.random_seed}"
     if args.optimizer == "Entropy-SGD":
         plot_name += f"-L{args.L}-{args.scale}"
+    elif args.optimizer == "C-Flat":
+        plot_name += f"-rho{args.rho}-lamb{args.lamb}-baseopt{args.base_optimizer}-baseoptlr{args.base_optimizer_lr}"
 
+    cache_name = f"{plot_name}.json"
     full_plot_name = "{}/{}.pdf".format(p_dir, plot_name)
     pp = open_pdf(full_plot_name)
     figure_list = []
-
-    print(args.optimizer)
 
     ################## CREATE TASK SEQUENCE ##################
 
@@ -155,7 +165,7 @@ def main(args):
     config = {"size": 28, "channels": 1, "classes": 10}
 
     # Set for each task the amount of rotation to use
-    rotations = [0, 80, 160]
+    rotations = [0, 160, 80]
 
     # Specify for each task the transformed train- and test set
     n_tasks = len(rotations)
@@ -229,6 +239,12 @@ def main(args):
     if args.optimizer == "Entropy-SGD":
         kwargs["L"] = args.L
         kwargs["scale"] = args.scale
+    elif args.optimizer == "C-Flat":
+        kwargs["rho"] = args.rho
+        kwargs["lamb"] = args.lamb
+        kwargs["base_optimizer"] = initialize_optimizer(
+            model, args.base_optimizer, lr=args.base_optimizer_lr
+        )
 
     # Define a list to keep track of the performance on task 1 after each iteration
     performance_tasks = {f"task_{i}": [] for i in range(1, len(test_datasets) + 1)}
@@ -284,6 +300,13 @@ def main(args):
         pp.savefig(figure)
 
     pp.close()
+
+    metrics = compute_all_metrics(performance_tasks)
+    print(metrics)
+
+    with open(cache_name, "w") as f:
+        json.dump(performance_tasks, f)
+
     print("\nGenerated plot: {}\n".format(full_plot_name))
 
 
@@ -294,9 +317,17 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--num_iters", type=int, default=500)
     parser.add_argument("--test_size", type=int, default=2000)
+    parser.add_argument("--random_seed", type=int, default=42)
+
     # Entropy-SGD parameters
     parser.add_argument("--L", type=int, default=5)
     parser.add_argument("--scale", type=float, default=1e-2)
+
+    # C-Flat parameters
+    parser.add_argument("--base_optimizer", type=str, default="SGD")
+    parser.add_argument("--base_optimizer_lr", type=float, default=0.1)
+    parser.add_argument("--lamb", type=float, default=0.2)
+    parser.add_argument("--rho", type=float, default=0.2)
 
     args = parser.parse_args()
     main(args)

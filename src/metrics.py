@@ -1,18 +1,20 @@
+from typing import Optional
+
+import numpy as np
 import torch
 
 from src.utils import checkattr, get_data_loader
 
 
-def test_acc(
+def accuracy(
     model,
     dataset,
-    batch_size=128,
-    test_size=1024,
-    verbose=True,
-    context_id=None,
-    allowed_classes=None,
-    no_context_mask=False,
-    **kwargs,
+    batch_size: int = 128,
+    test_size: int = 1024,
+    verbose: bool = True,
+    context_id: Optional[int] = None,
+    allowed_classes: Optional[list[int]] = None,
+    no_context_mask: bool = False,
 ):
     """Evaluate accuracy (= proportion of samples classified correctly) of a classifier ([model]) on [dataset].
 
@@ -80,17 +82,35 @@ def test_acc(
     return accuracy
 
 
-def accuracy(output, target, topk=(1,)):
-    """Computes the precision@k for the specified values of k"""
-    maxk = max(topk)
-    batch_size = target.size(0)
+def stability_gap_depth(start_accuracy: float, metrics: list[float]):
+    return np.argmin(metrics), start_accuracy - metrics[np.argmin(metrics)]
 
-    _, pred = output.topk(maxk, 1, True, True)
-    pred = pred.t()
-    correct = pred.eq(target.view(1, -1).expand_as(pred))
 
-    res = []
-    for k in topk:
-        correct_k = correct[:k].view(-1).float().sum(0)
-        res.append(correct_k.mul_(100.0 / batch_size))
-    return res
+def stability_gap_width(start_accuracy: float, metrics: list[float]):
+    min_index, _ = stability_gap_depth(start_accuracy, metrics)
+    metrics = np.array(metrics[min_index:])
+    recovered = np.where(metrics >= start_accuracy)[0]
+    return (min(recovered) + min_index).item()
+
+
+def compute_all_metrics(metrics: dict[str, list[float]]):
+    results = {}
+
+    num_iters = len(metrics["task_1"]) // 3
+
+    # compute accuracies
+    for key, value in metrics.items():
+        results[f"{key}_accuracy"] = value[-1]
+
+    # compute stability gap metrics
+    for i in range(len(metrics) - 1):
+        results[f"stability_gap_depth_{i + 1}"] = stability_gap_depth(
+            metrics[f"task_{i + 1}"][(i + 1) * num_iters - 1],
+            metrics[f"task_{i + 1}"][(i + 1) * num_iters :],
+        )[1]
+
+        results[f"stability_gap_width_{i + 1}"] = stability_gap_width(
+            metrics[f"task_{i + 1}"][(i + 1) * num_iters - 1],
+            metrics[f"task_{i + 1}"][(i + 1) * num_iters :],
+        )
+    return results
