@@ -11,10 +11,7 @@ def accuracy(
     dataset,
     batch_size: int = 128,
     test_size: int = 1024,
-    verbose: bool = True,
-    context_id: Optional[int] = None,
     allowed_classes: Optional[list[int]] = None,
-    no_context_mask: bool = False,
 ):
     """Evaluate accuracy (= proportion of samples classified correctly) of a classifier ([model]) on [dataset].
 
@@ -29,24 +26,8 @@ def accuracy(
     mode = model.training
     model.eval()
 
-    # Apply context-specific "gating-mask" for each hidden fully connected layer (or remove it!)
-    if hasattr(model, "mask_dict") and model.mask_dict is not None:
-        if no_context_mask:
-            model.reset_XdGmask()
-        else:
-            model.apply_XdGmask(context=context_id + 1)
-
     # Should output-labels be adjusted for allowed classes? (ASSUMPTION: [allowed_classes] has consecutive numbers)
-    label_correction = (
-        0
-        if checkattr(model, "stream_classifier") or (allowed_classes is None)
-        else allowed_classes[0]
-    )
-
-    # If there is a separate network per context, select the correct subnetwork
-    if model.label == "SeparateClassifiers":
-        model = getattr(model, "context{}".format(context_id + 1))
-        allowed_classes = None
+    label_correction = 0
 
     # Loop over batches in [dataset]
     data_loader = get_data_loader(dataset, batch_size, cuda=cuda)
@@ -56,15 +37,10 @@ def accuracy(
         if test_size:
             if total_tested >= test_size:
                 break
-        # -if the model is a "stream-classifier", add context
-        if checkattr(model, "stream_classifier"):
-            context_tensor = torch.tensor([context_id] * x.shape[0]).to(device)
-        # -evaluate model (if requested, only on [allowed_classes])
+
         with torch.no_grad():
-            if checkattr(model, "stream_classifier"):
-                scores = model.classify(x.to(device), context=context_tensor)
-            else:
-                scores = model.classify(x.to(device), allowed_classes=allowed_classes)
+            scores = model.classify(x.to(device), allowed_classes=allowed_classes)
+
         _, predicted = torch.max(scores.cpu(), 1)
         if model.prototypes and max(predicted).item() >= model.classes:
             # -in case of Domain-IL (or Task-IL + singlehead), collapse all corresponding domains to same class
@@ -77,8 +53,7 @@ def accuracy(
 
     # Set model back to its initial mode, print result on screen (if requested) and return it
     model.train(mode=mode)
-    if verbose:
-        print("=> accuracy: {:.3f}".format(accuracy))
+
     return accuracy
 
 

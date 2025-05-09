@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 from src.data.manipulate import TransformedDataset
 from src.metrics import accuracy, compute_all_metrics
 from src.models.classifier import Classifier
+from src.optimizers.second_order_optimizer import second_order_helper
 from src.optimizers.utils import initialize_optimizer
 from src.utils import open_pdf, plot_lines, print_model_info, set_seed
 
@@ -74,6 +75,10 @@ def train_and_evaluate(
     )
     iters_left = len(data_loader) + 1
 
+    if optimizer_name == "Second-Order":
+        kwargs["data_loader"] = data_loader
+        kwargs["criterion"] = criterion
+
     optimizer = initialize_optimizer(
         model, optimizer_name=optimizer_name, lr=lr, **kwargs
     )
@@ -101,14 +106,16 @@ def train_and_evaluate(
 
         # Calculate test accuracy (in %)
         for i, test_set in enumerate(test_sets):
-            acc = 100 * accuracy(
-                model, test_set, test_size=test_size, verbose=False, batch_size=512
-            )
+            acc = 100 * accuracy(model, test_set, test_size=test_size, batch_size=512)
             performance[f"task_{i + 1}"].append(acc)
 
         if optimizer_name == "Entropy-SGD":
             loss = optimizer.step(
                 helper(model, optimizer, data_loader, criterion), model, criterion
+            )
+        elif optimizer_name == "Second-Order":
+            loss = optimizer.step(
+                closure=second_order_helper(model, optimizer, data_loader, criterion)
             )
         else:
             loss = optimizer.step(
@@ -239,12 +246,13 @@ def main(args):
     if args.optimizer == "Entropy-SGD":
         kwargs["L"] = args.L
         kwargs["scale"] = args.scale
-    elif args.optimizer == "C-Flat":
-        kwargs["rho"] = args.rho
+    elif args.optimizer == "Second-Order" or args.optimizer == "C-Flat":
         kwargs["lamb"] = args.lamb
         kwargs["base_optimizer"] = initialize_optimizer(
             model, args.base_optimizer, lr=args.base_optimizer_lr
         )
+        if args.optimizer == "C-Flat":
+            kwargs["rho"] = args.rho
 
     # Define a list to keep track of the performance on task 1 after each iteration
     performance_tasks = {f"task_{i}": [] for i in range(1, len(test_datasets) + 1)}
@@ -323,7 +331,7 @@ if __name__ == "__main__":
     parser.add_argument("--L", type=int, default=5)
     parser.add_argument("--scale", type=float, default=1e-2)
 
-    # C-Flat parameters
+    # C-Flat parameters (and Second-Order)
     parser.add_argument("--base_optimizer", type=str, default="SGD")
     parser.add_argument("--base_optimizer_lr", type=float, default=0.1)
     parser.add_argument("--lamb", type=float, default=0.2)
