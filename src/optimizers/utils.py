@@ -3,19 +3,31 @@ import torch.nn as nn
 
 from src.optimizers.c_flat import C_Flat
 from src.optimizers.entropy_sgd import EntropySGD
-from src.optimizers.second_order_optimizer import SecondOrderOptimizer
 
 
-def initialize_optimizer(model: nn.Module, optimizer_name: str = "SGD", **kwargs):
+def initialize_optimizer(
+    model: nn.Module,
+    lr: float,
+    optimizer_name: str = "SGD",
+    base_optimizer=None,
+    **kwargs,
+):
     if optimizer_name == "SGD":
-        return torch.optim.SGD(model.parameters(), **kwargs)
+        return torch.optim.SGD(model.parameters(), lr=lr, **kwargs)
     elif optimizer_name == "Adam":
-        return torch.optim.Adam(model.parameters(), **kwargs)
+        return torch.optim.Adam(model.parameters(), lr=lr, **kwargs)
     elif optimizer_name == "Entropy-SGD":
-        return EntropySGD(model.parameters(), kwargs)
+        return EntropySGD(
+            model.parameters(), base_optimizer=base_optimizer, config=kwargs
+        )
     elif optimizer_name == "C-Flat":
-        return C_Flat(model.parameters(), model=model, cflat=True, **kwargs)
-    elif optimizer_name == "Second-Order":
-        return SecondOrderOptimizer(model.parameters(), model=model, **kwargs)
+        return C_Flat(
+            model.parameters(),
+            lr=lr,
+            base_optimizer=base_optimizer,
+            model=model,
+            cflat=True,
+            **kwargs,
+        )
     else:
         raise ValueError("Optimizer '{}' not recognized.".format(optimizer_name))

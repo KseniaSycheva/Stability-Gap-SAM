@@ -94,20 +94,20 @@ class TransformedDataset(Dataset):
 
     def __init__(self, original_dataset, transform=None, target_transform=None):
         super().__init__()
-        self.dataset = original_dataset
+        self.dataset = []
         self.transform = transform
         self.target_transform = target_transform
+
+        for x, y in original_dataset:
+            x = transform(x) if transform is not None else x
+            y = target_transform(y) if target_transform is not None else y
+            self.dataset.append((x, y))
 
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, index):
-        (input, target) = self.dataset[index]
-        if self.transform:
-            input = self.transform(input)
-        if self.target_transform:
-            target = self.target_transform(target)
-        return (input, target)
+        return self.dataset[index]
 
 
 # ----------------------------------------------------------------------------------------------------------#

@@ -21,16 +21,21 @@ import matplotlib.pyplot as plt
 from src.data.manipulate import TransformedDataset
 from src.metrics import accuracy, compute_all_metrics
 from src.models.classifier import Classifier
-from src.optimizers.second_order_optimizer import second_order_helper
 from src.optimizers.utils import initialize_optimizer
 from src.utils import open_pdf, plot_lines, print_model_info, set_seed
 
 
-def helper(model, optimizer, data_loader, criterion):
+def helper(model, optimizer, criterion, xxs=None, yys=None, dataloader=None):
     def closure():
-        x, y = next(data_loader)
+        if xxs is None:
+            xs, ys = next(iter(dataloader))
+        else:
+            xs, ys = xxs, yys
+
         if torch.cuda.is_available():
-            x, y = x.cuda(), y.cuda()
+            x, y = xs.cuda(), ys.cuda()
+        else:
+            x, y = xs, ys
 
         x, y = Variable(x), Variable(y.squeeze())
 
@@ -79,6 +84,28 @@ def train_and_evaluate(
         kwargs["data_loader"] = data_loader
         kwargs["criterion"] = criterion
 
+    if args.optimizer == "C-Flat" or args.optimizer == "Entropy-SGD":
+        if args.base_optimizer == "Entropy-SGD":
+            base_optimizer_kwargs = {"L": args.L, "scale": args.scale}
+        elif args.base_optimizer == "C-Flat":
+            opt = initialize_optimizer(
+                model, optimizer_name="SGD", lr=args.base_optimizer_lr
+            )
+            base_optimizer_kwargs = {
+                "rho": args.rho,
+                "lamb": args.lamb,
+                "base_optimizer": opt,
+            }
+        else:
+            base_optimizer_kwargs = {}
+
+        kwargs["base_optimizer"] = initialize_optimizer(
+            model,
+            optimizer_name=args.base_optimizer,
+            lr=args.base_optimizer_lr,
+            **base_optimizer_kwargs,
+        )
+
     optimizer = initialize_optimizer(
         model, optimizer_name=optimizer_name, lr=lr, **kwargs
     )
@@ -88,12 +115,10 @@ def train_and_evaluate(
 
     if optimizer_name == "Entropy-SGD":
         n_iter_per_step = kwargs.get("L", 0) + 1
-    elif optimizer_name == "C-Flat":
-        n_iter_per_step = 4
     else:
         n_iter_per_step = 1
 
-    for _ in range(1, iters + 1):
+    for step in range(1, iters + 1):
         # Collect data from training set and compute the loss
         iters_left -= n_iter_per_step
         if iters_left < n_iter_per_step:
@@ -109,18 +134,21 @@ def train_and_evaluate(
             acc = 100 * accuracy(model, test_set, test_size=test_size, batch_size=512)
             performance[f"task_{i + 1}"].append(acc)
 
+        if optimizer_name != "Entropy-SGD":
+            x, y = next(data_loader)
+
         if optimizer_name == "Entropy-SGD":
             loss = optimizer.step(
-                helper(model, optimizer, data_loader, criterion), model, criterion
+                helper(model, optimizer, criterion, dataloader=data_loader),
+                model,
+                criterion,
             )
-        elif optimizer_name == "Second-Order":
+        elif optimizer_name == "C-Flat":
             loss = optimizer.step(
-                closure=second_order_helper(model, optimizer, data_loader, criterion)
+                closure=helper(model, optimizer, criterion, xxs=x, yys=y),
             )
         else:
-            loss = optimizer.step(
-                closure=helper(model, optimizer, data_loader, criterion)
-            )
+            loss = optimizer.step(closure=helper(model, optimizer, criterion, x, y))
 
         progress_bar.set_description(
             "<CLASSIFIER> | training loss: {loss:.3} | test accuracy: {prec:.3}% |".format(
@@ -150,18 +178,22 @@ def main(args):
     # Open pdf for plotting
     plot_name = f"stability_gap_example-{args.optimizer}-{args.lr}-{args.num_iters}-{args.random_seed}"
     if args.optimizer == "Entropy-SGD":
-        plot_name += f"-L{args.L}-{args.scale}"
+        plot_name += f"-L{args.L}-{args.scale}-baseopt{args.base_optimizer}-baseoptlr{args.base_optimizer_lr}"
     elif args.optimizer == "C-Flat":
         plot_name += f"-rho{args.rho}-lamb{args.lamb}-baseopt{args.base_optimizer}-baseoptlr{args.base_optimizer_lr}"
 
-    cache_name = f"{plot_name}.json"
+    cache_name = f"cache/0_160_80/{plot_name}.json"
     full_plot_name = "{}/{}.pdf".format(p_dir, plot_name)
     pp = open_pdf(full_plot_name)
     figure_list = []
 
+    if os.path.exists(cache_name):
+        print(compute_all_metrics(json.load(open(cache_name, "r"))))
+        return
+
     ################## CREATE TASK SEQUENCE ##################
 
-    ## Download the MNIST dataset
+    # Download the MNIST dataset
     print("\n\n " + " LOAD DATA ".center(70, "*"))
     MNIST_trainset = datasets.MNIST(
         root="data/", train=True, download=True, transform=transforms.ToTensor()
@@ -246,13 +278,9 @@ def main(args):
     if args.optimizer == "Entropy-SGD":
         kwargs["L"] = args.L
         kwargs["scale"] = args.scale
-    elif args.optimizer == "Second-Order" or args.optimizer == "C-Flat":
+    elif args.optimizer == "C-Flat":
         kwargs["lamb"] = args.lamb
-        kwargs["base_optimizer"] = initialize_optimizer(
-            model, args.base_optimizer, lr=args.base_optimizer_lr
-        )
-        if args.optimizer == "C-Flat":
-            kwargs["rho"] = args.rho
+        kwargs["rho"] = args.rho
 
     # Define a list to keep track of the performance on task 1 after each iteration
     performance_tasks = {f"task_{i}": [] for i in range(1, len(test_datasets) + 1)}
@@ -288,7 +316,7 @@ def main(args):
 
     ################## PLOTTING ##################
 
-    ## Plot per-iteration performance curve
+    # Plot per-iteration performance curve
     figure = plot_lines(
         list(performance_tasks.values()),
         x_axes=list(range(n_tasks * iters)),
@@ -303,7 +331,7 @@ def main(args):
     )
     figure_list.append(figure)
 
-    ## Finalize the pdf with the plots
+    # Finalize the pdf with the plots
     for figure in figure_list:
         pp.savefig(figure)
 
@@ -327,13 +355,14 @@ if __name__ == "__main__":
     parser.add_argument("--test_size", type=int, default=2000)
     parser.add_argument("--random_seed", type=int, default=42)
 
+    parser.add_argument("--base_optimizer", type=str, default="SGD")
+    parser.add_argument("--base_optimizer_lr", type=float, default=0.1)
+
     # Entropy-SGD parameters
     parser.add_argument("--L", type=int, default=5)
     parser.add_argument("--scale", type=float, default=1e-2)
 
-    # C-Flat parameters (and Second-Order)
-    parser.add_argument("--base_optimizer", type=str, default="SGD")
-    parser.add_argument("--base_optimizer_lr", type=float, default=0.1)
+    # C-Flat parameters
     parser.add_argument("--lamb", type=float, default=0.2)
     parser.add_argument("--rho", type=float, default=0.2)
 

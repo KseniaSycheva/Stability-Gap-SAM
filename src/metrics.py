@@ -58,13 +58,20 @@ def accuracy(
 
 
 def stability_gap_depth(start_accuracy: float, metrics: list[float]):
-    return np.argmin(metrics), start_accuracy - metrics[np.argmin(metrics)]
+    return len(metrics) - np.argmin(metrics[::-1]), start_accuracy - metrics[
+        np.argmin(metrics)
+    ]
 
 
-def stability_gap_width(start_accuracy: float, metrics: list[float]):
+def stability_gap_width(
+    start_accuracy: float, metrics: list[float], threshold: float = 0.9
+):
     min_index, _ = stability_gap_depth(start_accuracy, metrics)
     metrics = np.array(metrics[min_index:])
     recovered = np.where(metrics >= start_accuracy)[0]
+
+    if len(recovered) == 0:
+        return -1
     return (min(recovered) + min_index).item()
 
 
@@ -80,12 +87,12 @@ def compute_all_metrics(metrics: dict[str, list[float]]):
     # compute stability gap metrics
     for i in range(len(metrics) - 1):
         results[f"stability_gap_depth_{i + 1}"] = stability_gap_depth(
-            metrics[f"task_{i + 1}"][(i + 1) * num_iters - 1],
-            metrics[f"task_{i + 1}"][(i + 1) * num_iters :],
+            metrics[f"task_1"][(i + 1) * num_iters - 1],
+            metrics[f"task_1"][(i + 1) * num_iters :],
         )[1]
 
         results[f"stability_gap_width_{i + 1}"] = stability_gap_width(
-            metrics[f"task_{i + 1}"][(i + 1) * num_iters - 1],
-            metrics[f"task_{i + 1}"][(i + 1) * num_iters :],
+            metrics[f"task_1"][(i + 1) * num_iters - 1],
+            metrics[f"task_1"][(i + 1) * num_iters : (i + 2) * num_iters],
         )
     return results
