@@ -1,11 +1,26 @@
 from copy import deepcopy
+from typing import Any, Optional, TypeAlias, Union, Iterable, Callable
 
 import numpy as np
+
+import torch
+import torch.nn as nn
 from torch.optim import Optimizer
 
 
+ParamsT: TypeAlias = Union[Iterable[torch.Tensor], Iterable[dict[str, Any]]]
+
+
 class EntropySGD(Optimizer):
-    def __init__(self, params, config={}):
+    def __init__(
+        self,
+        params,
+        config: Optional[dict[str, Any]] = None,
+        base_optimizer: Optimizer = None,
+    ):
+        if config is None:
+            config = {}
+
         defaults = dict(
             lr=0.01,
             momentum=0,
@@ -24,7 +39,14 @@ class EntropySGD(Optimizer):
         super(EntropySGD, self).__init__(params, config)
         self.config = config
 
-    def step(self, closure=None, model=None, criterion=None):
+        self.base_optimizer = base_optimizer
+
+    def step(
+        self,
+        closure: Callable[[], float] = None,
+        model: nn.Module = None,
+        criterion=None,
+    ):
         assert (
             (closure is not None) and (model is not None) and (criterion is not None)
         ), "attach closure for Entropy-SGD, model and criterion"
@@ -32,7 +54,6 @@ class EntropySGD(Optimizer):
         mf = closure()
 
         c = self.config
-        lr = c["lr"]
         mom = c["momentum"]
         wd = c["weight_decay"]
         damp = c["damp"]
@@ -102,18 +123,6 @@ class EntropySGD(Optimizer):
                 w.data.copy_(state["wc"][i])
                 w.grad.data.copy_(w.data - lp["mw"][i])
 
-        for w, mdw, mw in zip(params, state["mdw"], lp["mw"]):
-            dw = w.grad.data
-
-            if wd > 0:
-                dw.add_(wd, w.data)
-            if mom > 0:
-                mdw.mul_(mom).add_(1 - damp, dw)
-                if nesterov:
-                    dw.add_(mom, mdw)
-                else:
-                    dw = mdw
-
-            w.data.add_(-lr, dw)
+        self.base_optimizer.step()
 
         return mf
